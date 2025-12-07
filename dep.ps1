@@ -31,7 +31,7 @@ param(
 )
 
 # Clear any existing Azure context
-
+#Clear-AzContext -Force -ErrorAction SilentlyContinue
 
 # Function to deploy template in a location
 function Deploy-TemplateToLocation {
@@ -121,6 +121,7 @@ Write-Host "Wallet: $Wallet" -ForegroundColor Yellow
 Write-Host "Resource Group Pattern: $ResourceGroupName-{location}" -ForegroundColor Yellow
 Write-Host ""
 
+#@
 
 # Step 2: Get all accessible subscriptions
 Write-Host "`nStep 2: Retrieving subscriptions..." -ForegroundColor Green
@@ -182,8 +183,7 @@ foreach ($subscription in $allSubscriptions) {
         # Get available locations for this subscription
         $locations = Get-AzLocation | Where-Object {
             $_.Providers -contains "Microsoft.Compute" -and  # Ensure Compute is available
-            $_.Location -notlike "*stage*" -and               # Exclude staging regions
-            $_.Location -notlike "*test*"                     # Exclude test regions
+            
         } | Select-Object -ExpandProperty Location -Unique
         
         Write-Host "  Available locations: $($locations.Count)" -ForegroundColor Cyan
@@ -241,4 +241,3 @@ Skipped: $skippedDeployments
 
 $logEntry | Out-File -FilePath ".\DeploymentLog_$(Get-Date -Format 'yyyyMMdd').txt" -Append
 Write-Host "Log saved to: .\DeploymentLog_$(Get-Date -Format 'yyyyMMdd').txt" -ForegroundColor Gray
-Clear-AzContext -Force -ErrorAction SilentlyContinue
