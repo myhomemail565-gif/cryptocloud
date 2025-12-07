@@ -182,7 +182,7 @@ foreach ($subscription in $allSubscriptions) {
         
         # Get available locations for this subscription
         $locations = Get-AzLocation | Where-Object {
-            $_.Providers -contains "Microsoft.Compute" -and  # Ensure Compute is available
+            $_.Providers -contains "Microsoft.Compute" # Ensure Compute is available
             
         } | Select-Object -ExpandProperty Location -Unique
         
