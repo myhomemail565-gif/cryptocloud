@@ -225,11 +225,8 @@ while ($true) {
 
     foreach ($sub in $allSubscriptions) {
         Write-Host "`n--- Processing Subscription: $($sub.Name) ($($sub.Id)) ---" -ForegroundColor White -BackgroundColor DarkBlue
-        $subContext = Get-AzContext -SubscriptionId $sub.Id -ErrorAction SilentlyContinue
-        if (-not $subContext) {
-            Set-AzContext -Subscription $sub.Id | Out-Null
-            $subContext = Get-AzContext
-        }
+        Set-AzContext -Subscription $sub.Id | Out-Null
+        $subContext = Get-AzContext
 
         # Get available locations for Compute services
         $locations = @()
