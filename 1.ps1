@@ -121,20 +121,6 @@ Write-Host "Wallet: $Wallet" -ForegroundColor Yellow
 Write-Host "Resource Group Pattern: $ResourceGroupName-{location}" -ForegroundColor Yellow
 Write-Host ""
 
-# Step 1: Connect to Azure
-try {
-    Write-Host "Step 1: Connecting to Azure..." -ForegroundColor Green
-    $connection = Connect-AzAccount -ErrorAction Stop
-    
-    if ($connection.Context.Account) {
-        Write-Host "  Connected as: $($connection.Context.Account)" -ForegroundColor Green
-    }
-}
-catch {
-    Write-Host "  Authentication failed: $_" -ForegroundColor Red
-    Write-Host "  Try: Connect-AzAccount -UseDeviceAuthentication" -ForegroundColor Yellow
-    exit 1
-}
 
 # Step 2: Get all accessible subscriptions
 Write-Host "`nStep 2: Retrieving subscriptions..." -ForegroundColor Green
