@@ -45,7 +45,7 @@ function Deploy-TemplateToLocation {
     
     # Create unique resource group name per subscription and location
     $rgName = "$BaseRGName-$($Location.Replace(' ', '').ToLower())"
-    $deploymentName = "deploy-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+    $deploymentName = "deploy11-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
     
     Write-Host "`n[SUBSCRIPTION: $SubscriptionName]" -ForegroundColor Magenta
     Write-Host "  Location: $Location" -ForegroundColor Cyan
