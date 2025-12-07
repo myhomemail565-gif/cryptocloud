@@ -310,8 +310,13 @@ while ($true) {
             }
 
             Write-Host "  Waiting for batch to complete..." -ForegroundColor Gray
-            $iterationLog += ($jobs | Wait-Job | Receive-Job)
+            # Wait for all jobs in the batch to finish
+            $jobs | Wait-Job | Out-Null
+            
+            # Collect results and then remove the jobs
+            $iterationLog += ($jobs | Receive-Job)
             $jobs | Remove-Job
+            
             Write-Host "  Batch complete." -ForegroundColor Green
         }
         Write-Host "--- Finished subscription: $($sub.Name) ---" -ForegroundColor Green
