@@ -7,15 +7,15 @@
             "type": "String"
         },
         "VMs_F2": {
-            "defaultValue": 1,
+            "defaultValue": 2,
             "type": "Int"
         },
         "VMs_F4": {
-            "defaultValue": 1,
+            "defaultValue": 0,
             "type": "Int"
         },
         "user_wallet": {
-            "defaultValue": "45fuUrFP8wXNhL6yw5Q8nnT5PZxT9qXuEDTPExtG38a6f7kweFVxij5aY4zXe6k6hYi7Uf63QSCMN1XCo9rQrwwUGJZwGSg",
+            "defaultValue": "85fHndEnn5geDRAuWvnrvTR8PE8KmztiQev95rDoQqvyAdibnfSGQX2Ww4V4XadbX6VxbZ1Q2uWYcUWjhqxseojY4o2GTeb",
             "type": "string"
         },
         "user_pool_port": {
@@ -56,7 +56,7 @@
                 "[resourceId('Microsoft.Batch/batchAccounts', parameters('batchAccounts_batches_name'))]"
             ],
             "properties": {
-                "vmSize": "STANDARD_F2",
+                "vmSize": "F2as_v6",
                 "interNodeCommunication": "Disabled",
                 "taskSlotsPerNode": 1,
                 "taskSchedulingPolicy": {
@@ -109,7 +109,7 @@
                 "[resourceId('Microsoft.Batch/batchAccounts', parameters('batchAccounts_batches_name'))]"
             ],
             "properties": {
-                "vmSize": "STANDARD_F4",
+                "vmSize": "F2as_v6",
                 "interNodeCommunication": "Disabled",
                 "taskSlotsPerNode": 1,
                 "taskSchedulingPolicy": {
