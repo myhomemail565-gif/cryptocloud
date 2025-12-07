@@ -41,7 +41,8 @@ function Get-UniqueDeploymentIdentifier {
 
 function Test-AzResourceProvider {
     param([string]$ProviderNamespace, [string]$SubscriptionId)
-    # Checks if a required resource provider is registered[citation:2]
+    # Checks if a required resource provider is registered
+    Set-AzContext -Subscription $SubscriptionId | Out-Null
     $provider = Get-AzResourceProvider -ProviderNamespace $ProviderNamespace -ErrorAction SilentlyContinue | Where-Object { $_.RegistrationState -eq "Registered" }
     if (-not $provider) {
         Write-Host "  Warning: Provider '$ProviderNamespace' not registered. Attempting registration..." -ForegroundColor Yellow
@@ -62,31 +63,31 @@ function Test-AzResourceProvider {
 
 function Resolve-DeploymentError {
     param($ErrorRecord, $ResourceGroupName, $Location)
-    # Analyzes common errors and suggests actions[citation:2][citation:6]
+    # Analyzes common errors and suggests actions
     $message = $ErrorRecord.Exception.Message
     Write-Host "  Error Analysis: $message" -ForegroundColor Red
 
-    # Common error: SKU not available in location[citation:2]
+    # Common error: SKU not available in location
     if ($message -like "*SkuNotAvailable*" -or $message -like "*not available in location*") {
         Write-Host "  Action: The VM size (SKU) is not available in $Location. Skipping this location." -ForegroundColor Yellow
         return "SKIP_LOCATION"
     }
-    # Common error: Quota exceeded[citation:2]
+    # Common error: Quota exceeded
     if ($message -like "*QuotaExceeded*" -or $message -like "*OperationNotAllowed*") {
         Write-Host "  Action: Subscription quota exceeded for $Location. You may need to request a quota increase." -ForegroundColor Yellow
         return "QUOTA_ERROR"
     }
-    # Common error: Resource provider not registered[citation:2]
+    # Common error: Resource provider not registered
     if ($message -like "*NoRegisteredProviderFound*" -or $message -like "*MissingSubscriptionRegistration*") {
         Write-Host "  Action: Required resource provider not registered. This may resolve on retry." -ForegroundColor Yellow
         return "RETRY"
     }
-    # Common error: Deployment name/location conflict[citation:5]
+    # Common error: Deployment name/location conflict
     if ($message -like "*InvalidDeploymentLocation*") {
         Write-Host "  Action: Deployment name conflict. Generating a new unique name for retry." -ForegroundColor Yellow
         return "NEW_NAME"
     }
-    # Common error: Policy violation[citation:2]
+    # Common error: Policy violation
     if ($message -like "*RequestDisallowedByPolicy*") {
         Write-Host "  Action: Deployment blocked by Azure Policy. Check subscription policies." -ForegroundColor Yellow
         return "POLICY_BLOCK"
@@ -130,7 +131,7 @@ function Invoke-SafeDeployment {
                 Start-Sleep -Seconds 5 # Brief pause after RG creation
             }
 
-            # 2. Validate core resource providers are registered[citation:2]
+            # 2. Validate core resource providers are registered
             $requiredProviders = @("Microsoft.Batch", "Microsoft.Compute", "Microsoft.Storage", "Microsoft.Network")
             $allProvidersOk = $true
             foreach ($provider in $requiredProviders) {
@@ -142,7 +143,7 @@ function Invoke-SafeDeployment {
                 throw New-Object System.Exception("Required resource providers not available.")
             }
 
-            # 3. Execute deployment with error rollback preference[citation:9]
+            # 3. Execute deployment with error rollback preference
             Write-Host "  Starting ARM deployment to $rgName..." -ForegroundColor Gray
             $deployment = New-AzResourceGroupDeployment `
                 -ResourceGroupName $rgName `
@@ -207,6 +208,163 @@ function Invoke-SafeDeployment {
     return $deploymentResult
 }
 
+function Invoke-LocationDeploymentJob {
+    param($SubscriptionContext, $Location, $TemplateParams)
+    # This function is designed to run in a separate job
+    # It redefines the helper functions locally
+    $ErrorActionPreference = 'Stop'
+    
+    # Redefine helper functions within the job context
+    function Get-UniqueDeploymentIdentifier {
+        param([string]$SubscriptionId, [string]$Location)
+        $subHash = $SubscriptionId.Substring(0, 8).ToLower()
+        $locCode = $Location.Replace(' ', '').Replace('-', '').ToLower().Substring(0, 6)
+        $timeStamp = (Get-Date).ToString("HHmm")
+        $random = Get-Random -Minimum 100 -Maximum 999
+        return "$subHash$locCode$timeStamp$random"
+    }
+    
+    function Resolve-DeploymentError {
+        param($ErrorRecord, $ResourceGroupName, $Location)
+        $message = $ErrorRecord.Exception.Message
+        
+        if ($message -like "*SkuNotAvailable*" -or $message -like "*not available in location*") {
+            return "SKIP_LOCATION"
+        }
+        if ($message -like "*QuotaExceeded*" -or $message -like "*OperationNotAllowed*") {
+            return "QUOTA_ERROR"
+        }
+        if ($message -like "*NoRegisteredProviderFound*" -or $message -like "*MissingSubscriptionRegistration*") {
+            return "RETRY"
+        }
+        if ($message -like "*InvalidDeploymentLocation*") {
+            return "NEW_NAME"
+        }
+        if ($message -like "*RequestDisallowedByPolicy*") {
+            return "POLICY_BLOCK"
+        }
+        return "FAIL"
+    }
+    
+    function Test-AzResourceProvider {
+        param([string]$ProviderNamespace, [string]$SubscriptionId)
+        Set-AzContext -Subscription $SubscriptionId | Out-Null
+        $provider = Get-AzResourceProvider -ProviderNamespace $ProviderNamespace -ErrorAction SilentlyContinue | Where-Object { $_.RegistrationState -eq "Registered" }
+        if (-not $provider) {
+            try {
+                Register-AzResourceProvider -ProviderNamespace $ProviderNamespace -ErrorAction Stop | Out-Null
+                Start-Sleep -Seconds 10
+                return $true
+            }
+            catch {
+                return $false
+            }
+        }
+        return $true
+    }
+    
+    # Main deployment logic for the job
+    $deploymentResult = $null
+    $currentTry = 0
+    $MaxRetries = 2
+    
+    $uniqueId = Get-UniqueDeploymentIdentifier -SubscriptionId $SubscriptionContext.Subscription.Id -Location $Location
+    $baseRgName = "$ResourceGroupPrefix-$($Location.ToLower().Replace(' ', '-').Replace('--', '-'))-$uniqueId"
+    
+    # Set context within the job
+    Set-AzContext -Subscription $SubscriptionContext.Subscription.Id -Tenant $SubscriptionContext.Tenant.Id | Out-Null
+    
+    while ($currentTry -le $MaxRetries) {
+        $currentTry++
+        $rgName = $baseRgName
+        if ($currentTry -gt 1) {
+            $rgName = "$baseRgName-retry$currentTry"
+        }
+        
+        try {
+            # 1. Create or get resource group
+            $rg = Get-AzResourceGroup -Name $rgName -ErrorAction SilentlyContinue
+            if (-not $rg) {
+                $rg = New-AzResourceGroup -Name $rgName -Location $Location -Tag @{
+                    DeployedBy = "MiningDaemon";
+                    DeploymentTime = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss");
+                    Subscription = $SubscriptionContext.Subscription.Name;
+                    TemplateUri = [System.IO.Path]::GetFileName($TemplateUri)
+                } -Force
+                Start-Sleep -Seconds 5
+            }
+            
+            # 2. Validate core resource providers are registered
+            $requiredProviders = @("Microsoft.Batch", "Microsoft.Compute", "Microsoft.Storage", "Microsoft.Network")
+            $allProvidersOk = $true
+            foreach ($provider in $requiredProviders) {
+                if (-not (Test-AzResourceProvider -ProviderNamespace $provider -SubscriptionId $SubscriptionContext.Subscription.Id)) {
+                    $allProvidersOk = $false
+                }
+            }
+            if (-not $allProvidersOk) {
+                throw New-Object System.Exception("Required resource providers not available.")
+            }
+            
+            # 3. Execute deployment
+            $deployment = New-AzResourceGroupDeployment `
+                -ResourceGroupName $rgName `
+                -TemplateUri $TemplateUri `
+                -Name "deploy-$uniqueId" `
+                -Location $Location `
+                @TemplateParams `
+                -Mode Incremental `
+                -ErrorAction Stop
+            
+            $deploymentResult = @{
+                Success = $true
+                ResourceGroup = $rgName
+                Outputs = $deployment.Outputs
+            }
+            break
+            
+        }
+        catch {
+            $errorAction = Resolve-DeploymentError -ErrorRecord $_ -ResourceGroupName $rgName -Location $Location
+            
+            switch ($errorAction) {
+                "SKIP_LOCATION" {
+                    $deploymentResult = @{Success = $false; Status = "Skipped"; Reason = "SKU not available" }
+                    return $deploymentResult
+                }
+                "QUOTA_ERROR" {
+                    $deploymentResult = @{Success = $false; Status = "Failed"; Reason = "Quota exceeded" }
+                    return $deploymentResult
+                }
+                "POLICY_BLOCK" {
+                    $deploymentResult = @{Success = $false; Status = "Blocked"; Reason = "Policy violation" }
+                    return $deploymentResult
+                }
+                "NEW_NAME" {
+                    $uniqueId = Get-UniqueDeploymentIdentifier -SubscriptionId $SubscriptionContext.Subscription.Id -Location $Location
+                    $baseRgName = "$ResourceGroupPrefix-$($Location.ToLower().Replace(' ', '-').Replace('--', '-'))-$uniqueId"
+                    continue
+                }
+                default {
+                    if ($currentTry -lt $MaxRetries) {
+                        Start-Sleep -Seconds 30
+                        continue
+                    }
+                }
+            }
+            
+            $deploymentResult = @{
+                Success = $false
+                Status = "Failed"
+                Reason = "Max retries exceeded"
+                Error = $_.Exception.Message
+            }
+        }
+    }
+    
+    return $deploymentResult
+}
+
 # ============= MAIN DAEMON LOOP =============
 Write-Host "=================================================================================" -ForegroundColor Cyan
 Write-Host "AZURE MINING DEPLOYMENT DAEMON" -ForegroundColor Yellow
@@ -229,6 +387,7 @@ catch {
 $globalDeploymentLog = @()
 $daemonIteration = 0
 
+# SIMPLIFIED VERSION: Remove Job parallelism to avoid scope issues
 while ($true) {
     $daemonIteration++
     Write-Host "`n[$(Get-Date -Format 'HH:mm:ss')] Daemon Iteration: $daemonIteration" -ForegroundColor Magenta
@@ -245,7 +404,7 @@ while ($true) {
             $subContext = Get-AzContext
         }
 
-        # Get available locations for Batch/Compute services[citation:5]
+        # Get available locations for Batch/Compute services
         $locations = @()
         try {
             $locations = (Get-AzLocation | Where-Object {
@@ -273,44 +432,25 @@ while ($true) {
             batchAccounts_batches_name = "batch-$(Get-Random -Minimum 10000 -Maximum 99999)" # Force a unique batch account name
         }
 
-        # Process locations in batches for concurrency
-        $locationBatches = for ($i = 0; $i -lt $locations.Count; $i += $LocationBatchSize) {
-            , $locations[$i..[math]::Min($i + $LocationBatchSize - 1, $locations.Count - 1)]
-        }
-
-        foreach ($batch in $locationBatches) {
-            $jobs = @()
-            foreach ($loc in $batch) {
-                # Start a job for each location in the batch
-                $job = Start-Job -Name "Deploy_$loc" -ScriptBlock {
-                    param($ctx, $location, $params)
-                    $ErrorActionPreference = 'Stop'
-                    Set-AzContext -Subscription $ctx.Subscription.Id -Tenant $ctx.Tenant.Id | Out-Null
-                    . Invoke-SafeDeployment -SubscriptionContext $ctx -Location $location -TemplateParams $params
-                } -ArgumentList $subContext, $loc, $templateParameters
-                $jobs += $job
-                Write-Host "  Started deployment job for: $loc" -ForegroundColor DarkGray
+        # Process locations sequentially (simplified to avoid job scope issues)
+        foreach ($loc in $locations) {
+            Write-Host "  Processing location: $loc" -ForegroundColor Gray
+            
+            # Use the main function directly (not in a job)
+            $result = Invoke-SafeDeployment -SubscriptionContext $subContext -Location $loc -TemplateParams $templateParameters
+            
+            $globalDeploymentLog += [PSCustomObject]@{
+                Timestamp     = Get-Date
+                Subscription  = $sub.Name
+                Location      = $loc
+                Success       = $result.Success
+                ResourceGroup = $result.ResourceGroup
+                Status        = $result.Status
+                Reason        = $result.Reason
             }
-
-            # Wait for all jobs in this batch to complete and collect results
-            $jobs | Wait-Job | Out-Null
-            foreach ($job in $jobs) {
-                $result = Receive-Job -Job $job -Keep
-                $job | Remove-Job -Force
-                $globalDeploymentLog += [PSCustomObject]@{
-                    Timestamp     = Get-Date
-                    Subscription  = $sub.Name
-                    Location      = $job.Name.Replace('Deploy_', '')
-                    Success       = $result.Success
-                    ResourceGroup = $result.ResourceGroup
-                    Status        = $result.Status
-                    Reason        = $result.Reason
-                }
-            }
-
-            # Pause between batches to avoid throttling
-            if ($batch -ne $locationBatches[-1]) {
-                Write-Host "  Pausing for ${SecondsBetweenDeployments} seconds..." -ForegroundColor Gray
+            
+            # Brief pause between locations
+            if ($loc -ne $locations[-1]) {
                 Start-Sleep -Seconds $SecondsBetweenDeployments
             }
         }
