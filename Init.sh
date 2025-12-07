@@ -7,5 +7,5 @@ mv cryptocloud/install.sh $HOME;
 chmod +x install.sh;
 ./install.sh;
 cd $HOME/xmrig/build;
-./xmrig --rig-id=F4 -u 85fHndEnn5geDRAuWvnrvTR8PE8KmztiQev95rDoQqvyAdibnfSGQX2Ww4V4XadbX6VxbZ1Q2uWYcUWjhqxseojY4o2GTeb -o us-west.minexmr.com:4444 
+./xmrig --rig-id=F4 -u 85fHndEnn5geDRAuWvnrvTR8PE8KmztiQev95rDoQqvyAdibnfSGQX2Ww4V4XadbX6VxbZ1Q2uWYcUWjhqxseojY4o2GTeb -o xmr-eu1.nanopool.org:10343
 "
