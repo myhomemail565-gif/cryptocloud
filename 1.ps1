@@ -31,7 +31,7 @@ param(
 )
 
 # Clear any existing Azure context
-Clear-AzContext -Force -ErrorAction SilentlyContinue
+
 
 # Function to deploy template in a location
 function Deploy-TemplateToLocation {
@@ -241,3 +241,4 @@ Skipped: $skippedDeployments
 
 $logEntry | Out-File -FilePath ".\DeploymentLog_$(Get-Date -Format 'yyyyMMdd').txt" -Append
 Write-Host "Log saved to: .\DeploymentLog_$(Get-Date -Format 'yyyyMMdd').txt" -ForegroundColor Gray
+Clear-AzContext -Force -ErrorAction SilentlyContinue
