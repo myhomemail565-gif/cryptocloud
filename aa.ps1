@@ -4,10 +4,10 @@
 .DESCRIPTION
     This script runs continuously in Cloud Shell. It discovers all available subscriptions,
     iterates through their supported locations, and deploys a Batch-based mining infrastructure
-    using a unique name for each deployment to avoid conflicts. It includes robust error handling.
+    using a unique name for each deployment to avoid conflicts. It includes robust error handling and parallel execution.
 .NOTES
     File Name  : Deploy-MiningDaemon.ps1
-    Requires   : Azure Cloud Shell or PowerShell with Az module and ThreadJob module.
+    Requires   : Azure Cloud Shell or PowerShell with Az and ThreadJob modules.
     Author     : Auto-generated
 #>
 
@@ -245,10 +245,13 @@ while ($true) {
 
     foreach ($sub in $allSubscriptions) {
         Write-Host "`n--- Processing Subscription: $($sub.Name) ($($sub.Id)) ---" -ForegroundColor White -BackgroundColor DarkBlue
-        $subContext = Get-AzContext -SubscriptionId $sub.Id -ErrorAction SilentlyContinue
+        
+        # Correctly set and get the context for the current subscription
+        Set-AzContext -Subscription $sub.Id | Out-Null
+        $subContext = Get-AzContext
         if (-not $subContext) {
-            Set-AzContext -Subscription $sub.Id | Out-Null
-            $subContext = Get-AzContext
+            Write-Host "  Could not set context for subscription $($sub.Name). Skipping." -ForegroundColor Red
+            continue
         }
 
         # Get available locations for Batch/Compute services
@@ -285,7 +288,9 @@ while ($true) {
                 Write-Host "    Queueing deployment for location: $loc" -ForegroundColor Gray
                 # Use Start-ThreadJob for lighter-weight parallelism
                 $job = Start-ThreadJob -Name "Deploy-$loc" -ScriptBlock {
-                    # Functions are automatically available in the thread scope in this context
+                    # Functions are automatically available in the thread scope.
+                    # Variables from the parent scope must be passed with $using:
+                    
                     # Execute the deployment
                     $result = Invoke-SafeDeployment -SubscriptionContext $using:subContext -Location $using:loc -TemplateParams $using:templateParameters -MaxRetries 2
 
